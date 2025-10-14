@@ -1,40 +1,10 @@
 # train.py
 
-import os
 import torch
 import torch.nn.functional as F
 from model import HRMACTInner
 from sudoku import generate_sudoku, Difficulty
 import random
-import numpy as np
-
-from tqdm import tqdm
-
-PREGENERATED_PUZZLES = {} # Dict: Difficulty -> List[Tuple[np.ndarray, np.ndarray]]
-NUM_PREGENERATED_PER_DIFFICULTY = 1000 # Example: Generate 1,000 puzzles of each type once
-
-def _generate_puzzle_pool():
-    global PREGENERATED_PUZZLES
-    # check pregenerated puzzles
-    if os.path.exists('pregenerated_puzzles.npy'):
-        PREGENERATED_PUZZLES = np.load('pregenerated_puzzles.npy', allow_pickle=True).item()
-        print("✅ Loaded pre-generated puzzles.")
-        return
-
-    total_puzzles = NUM_PREGENERATED_PER_DIFFICULTY * len(TrainingBatch.DIFFICULTIES)
-    print("Pre-generating Sudoku puzzles... This might take a moment.")
-
-    with tqdm(total=total_puzzles, ncols=100) as pbar:
-        for diff in TrainingBatch.DIFFICULTIES:
-            PREGENERATED_PUZZLES[diff] = []
-            pbar.set_description(f"Generating puzzles [{diff}]")
-            for _ in range(NUM_PREGENERATED_PER_DIFFICULTY):
-                puzzle, solution = generate_sudoku(diff)
-                PREGENERATED_PUZZLES[diff].append((puzzle.flatten(), solution.flatten()))
-                pbar.update(1)
-    # Save pregenerated puzzle into a file
-    np.save('pregenerated_puzzles.npy', PREGENERATED_PUZZLES)
-    print(f"✅ Finished pre-generating {total_puzzles} puzzles across {len(TrainingBatch.DIFFICULTIES)} difficulties.")
 
 def sudoku_loss(model, hidden_states, board_inputs, board_targets, segments):
     config = model.config
@@ -113,14 +83,6 @@ class TrainingBatch:
         self.curriculum_level = 0
         self.total_puzzles = 0
 
-        # Ensure puzzles are pre-generated
-        if not PREGENERATED_PUZZLES:
-            _generate_puzzle_pool()
-
-        # Keep track of which puzzles in the pool have been used
-        self.puzzle_pool_indices = {diff: list(range(len(PREGENERATED_PUZZLES[diff]))) for diff in TrainingBatch.DIFFICULTIES}
-        self.current_puzzle_indices_ptr = {diff: 0 for diff in TrainingBatch.DIFFICULTIES}
-
         hidden_size = model.config.transformers.hidden_size
         seq_len = model.config.seq_len
 
@@ -139,34 +101,20 @@ class TrainingBatch:
     def _sample_difficulty(self):
         return random.choices(self.DIFFICULTIES, self.CURRICULUM_PROBAS[self.curriculum_level], k=1)[0]
 
-    def _sample_puzzle_from_pool(self, difficulty: Difficulty):
-        # Sample without replacement for a cleaner batch (or with replacement for infinite stream)
-        # For simplicity, let's just cycle through for now.
-        pool = PREGENERATED_PUZZLES[difficulty]
-        pool_len = len(pool)
-
-        ptr = self.current_puzzle_indices_ptr[difficulty]
-        puzzle_flat, solution_flat = pool[ptr]
-
-        self.current_puzzle_indices_ptr[difficulty] = (ptr + 1) % pool_len
-
-        # Shuffle the pool if we've cycled through to keep things random
-        if self.current_puzzle_indices_ptr[difficulty] == 0:
-            random.shuffle(PREGENERATED_PUZZLES[difficulty]) # Shuffle the actual list of tuples
-
-        return puzzle_flat, solution_flat
-
     def replace(self, idx: int):
-        # Instead of generate_sudoku, sample from pre-generated pool
-        puzzle_flat, solution_flat = self._sample_puzzle_from_pool(self._sample_difficulty())
+        puzzle, solution = generate_sudoku(self._sample_difficulty())
+        self.board_inputs[idx] = torch.tensor(puzzle.flatten(), device=self.device)
+        self.board_targets[idx] = torch.tensor(solution.flatten(), device=self.device)
 
-        self.board_inputs[idx] = torch.tensor(puzzle_flat, device=self.device)
-        self.board_targets[idx] = torch.tensor(solution_flat, device=self.device)
-
+        # FIX 2: Wrap the state reset in a `torch.no_grad()` context.
         with torch.no_grad():
             self.segments[idx] = 0
+
             seq_len = self.model.config.seq_len
             low_level_h, high_level_h = self.hidden_states
+
+            # This assignment correctly resets the state for one sample in the batch
+            # using the model's learnable initial state parameters.
             low_level_h[idx] = self.model.initial_low_level.unsqueeze(0).expand(seq_len + 1, -1)
             high_level_h[idx] = self.model.initial_high_level.unsqueeze(0).expand(seq_len + 1, -1)
 
