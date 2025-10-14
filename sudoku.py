@@ -4,7 +4,7 @@ import random
 import numpy as np
 from enum import Enum
 from datasets import load_dataset
-from collections import defaultdict
+import multiprocessing
 
 class Difficulty(Enum):
     VERY_EASY = (46, 50)
@@ -155,7 +155,7 @@ def generate_sudoku(difficulty: Difficulty):
 
     return puzzle, solution
 
-def load_online_puzzle(shard) -> dict:
+def load_online_puzzle(shard: str, batch_size: int = 1_000, num_proc: int = None) -> dict:
     """
     Load a Sudoku dataset from an online source and group puzzles by their 'missing' count.
 
@@ -167,17 +167,24 @@ def load_online_puzzle(shard) -> dict:
                         - 'solution': np.ndarray (9, 9)
                         - 'missing', 'difficulty', 'set', 'solving_time'
     """
+    total_cores = multiprocessing.cpu_count()
+    num_proc = max(1, (num_proc or total_cores - 1))
+
     # Load the dataset from Hugging Face
-    dataset = load_dataset("Ritvik19/Sudoku-Dataset", split=shard)
-    dataset = dataset.select_columns(['puzzle', 'solution', 'missing'])
+    ds = load_dataset("Ritvik19/Sudoku-Dataset", split=shard)
+    ds = ds.select_columns(['puzzle', 'solution', 'missing'])
+    def convert_batch(batch):
+        puzzles, solutions = [], []
+        for p_str, s_str in zip(batch["puzzle"], batch["solution"]):
+            puzzles.append(np.fromiter(map(int, p_str), dtype=np.int64).reshape(9, 9))
+            solutions.append(np.fromiter(map(int, s_str), dtype=np.int64).reshape(9, 9))
+        return {"puzzle": puzzles, "solution": solutions}
 
     # Convert 'puzzle' and 'solution' to 9x9 numpy arrays
-    dataset = dataset.map(lambda example: {
-        'puzzle': np.array(list(map(int, example['puzzle'])), dtype=np.int64).reshape(9, 9),
-        'solution': np.array(list(map(int, example['solution'])), dtype=np.int64).reshape(9, 9)
-    })
-    dataset = dataset.filter(lambda example: example['missing'] != 1)
-    return dataset
+    ds = ds.map(convert_batch, batched=True, batch_size=batch_size, num_proc=num_proc)
+
+    ds = ds.filter(lambda example: example['missing'] != 1, num_proc=num_proc)
+    return ds
 
 
 
