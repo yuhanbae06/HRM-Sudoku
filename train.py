@@ -6,7 +6,7 @@ import numpy as np
 from model import HRMACTInner
 from sudoku import load_online_puzzle, generate_sudoku, Difficulty
 import random
-
+import multiprocessing
 
 def sudoku_loss(model, hidden_states, board_inputs, board_targets, segments):
     config = model.config
@@ -79,7 +79,9 @@ class TrainingBatch:
     ]
 
     def _select_puzzle_pool(self, key):
-        return self.dataset.filter(lambda example: example['missing'] == key)
+        total_cores = multiprocessing.cpu_count()
+        num_proc = max(1, (num_proc or total_cores - 1))
+        return self.dataset.filter(lambda example: example['missing'] == key, num_proc=num_proc)
 
     def __init__(self, model: HRMACTInner, batch_size: int, device: torch.device, shard: str = None):
         self.model = model
@@ -147,7 +149,7 @@ class TrainingBatch:
         self.total_puzzles += 1
 
     def graduate(self):
-        if self.puzzle_pool is not None and self.curriculum_level + 1 < len(self.puzzle_pool.keys()):
+        if self.puzzle_pool is not None and self.curriculum_level + 1 < len(self.levels):
             self.curriculum_level += 1
             print(f"Graduated to curriculum level {self.curriculum_level}.")
         elif self.curriculum_level + 1 < len(self.CURRICULUM_PROBAS):
