@@ -80,7 +80,7 @@ class TrainingBatch:
 
     def _select_puzzle_pool(self, key):
         total_cores = multiprocessing.cpu_count()
-        num_proc = max(1, (num_proc or total_cores - 1))
+        num_proc = max(1,  total_cores - 1)
         return self.dataset.filter(lambda example: example['missing'] == key, num_proc=num_proc)
 
     def __init__(self, model: HRMACTInner, batch_size: int, device: torch.device, shard: str = None):
@@ -96,7 +96,8 @@ class TrainingBatch:
             print("Sample puzzle from dataset")
             self.dataset = load_online_puzzle(shard) if shard is not None else []
             self.levels = list(set(self.dataset['missing']))
-            self.puzzle_pool = self._select_puzzle_pool(self.levels[self.curriculum_level])
+            # self.puzzle_pool = self._select_puzzle_pool(self.levels[self.curriculum_level])
+            self.puzzle_pool = self.dataset
             self.sample_puzzle = self._sample_puzzle_from_dataset
 
         hidden_size = model.config.transformers.hidden_size
@@ -121,9 +122,11 @@ class TrainingBatch:
         return np.array(list(map(int, sample)), dtype=np.int64).reshape(9, 9),
 
     def _sample_puzzle_from_dataset(self, idx):
+        actual_idx = (self.total_puzzles + idx) % len(self.puzzle_pool)
+        print(f"Sampling puzzle from dataset at index {actual_idx}")
         return (
-            np.array(self.puzzle_pool[idx]['puzzle']),
-            np.array(self.puzzle_pool[idx]['solution'])
+            np.array(self.puzzle_pool[actual_idx]['puzzle']),
+            np.array(self.puzzle_pool[actual_idx]['solution'])
         )
 
     def _sample_puzzle_from_algorithm(self, difficulty, idx):

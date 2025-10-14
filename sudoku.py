@@ -171,7 +171,9 @@ def load_online_puzzle(shard: str, batch_size: int = 1_000, num_proc: int = None
     num_proc = max(1, (num_proc or total_cores - 1))
 
     # Load the dataset from Hugging Face
+    print("[INFO] Loading dataset...")
     ds = load_dataset("Ritvik19/Sudoku-Dataset", split=shard)
+    print("[INFO] Dataset remove columns.")
     ds = ds.select_columns(['puzzle', 'solution', 'missing'])
     def convert_batch(batch):
         puzzles, solutions = [], []
@@ -181,8 +183,9 @@ def load_online_puzzle(shard: str, batch_size: int = 1_000, num_proc: int = None
         return {"puzzle": puzzles, "solution": solutions}
 
     # Convert 'puzzle' and 'solution' to 9x9 numpy arrays
+    print("[INFO] Dataset format conversion.")
     ds = ds.map(convert_batch, batched=True, batch_size=batch_size, num_proc=num_proc)
-
+    print("[INFO] Dataset set remove coulumns is too easy")
     ds = ds.filter(lambda example: example['missing'] != 1, num_proc=num_proc)
     return ds
 
