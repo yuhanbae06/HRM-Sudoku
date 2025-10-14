@@ -169,26 +169,15 @@ def load_online_puzzle(shard) -> dict:
     """
     # Load the dataset from Hugging Face
     dataset = load_dataset("Ritvik19/Sudoku-Dataset", split=shard)
+    dataset = dataset.select_columns(['puzzle', 'solution', 'missing'])
 
     # Convert 'puzzle' and 'solution' to 9x9 numpy arrays
     dataset = dataset.map(lambda example: {
         'puzzle': np.array(list(map(int, example['puzzle'])), dtype=np.int64).reshape(9, 9),
         'solution': np.array(list(map(int, example['solution'])), dtype=np.int64).reshape(9, 9)
     })
-
-    # Sort and filter out cases with missing == 1
-    dataset = dataset.sort('missing')
     dataset = dataset.filter(lambda example: example['missing'] != 1)
-
-    # Group the dataset by 'missing' count
-    grouped_data = defaultdict(list)
-    for item in dataset:
-        grouped_data[item['missing']].append(item)
-
-    # Convert defaultdict to normal dict with string keys (JSON-friendly)
-    grouped_data = {str(k): v for k, v in grouped_data.items()}
-
-    return grouped_data
+    return dataset
 
 
 

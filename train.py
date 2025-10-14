@@ -78,6 +78,9 @@ class TrainingBatch:
         [0.1, 0.3, 0.4, 0.2],
     ]
 
+    def _select_puzzle_pool(self, key):
+        return self.dataset.filter(lambda example: example['missing'] == key)
+
     def __init__(self, model: HRMACTInner, batch_size: int, device: torch.device, shard: str = None):
         self.model = model
         self.batch_size = batch_size
@@ -89,7 +92,9 @@ class TrainingBatch:
             self.sample_puzzle = self._sample_puzzle_from_algorithm
         else:
             print("Sample puzzle from dataset")
-            self.puzzle_pool = load_online_puzzle(shard) if shard is not None else []
+            self.dataset = load_online_puzzle(shard) if shard is not None else []
+            self.levels = list(set(self.dataset['missing']))
+            self.puzzle_pool = self._select_puzzle_pool(self.levels[self.curriculum_level])
             self.sample_puzzle = self._sample_puzzle_from_dataset
 
         hidden_size = model.config.transformers.hidden_size
@@ -114,9 +119,10 @@ class TrainingBatch:
         return np.array(list(map(int, sample)), dtype=np.int64).reshape(9, 9),
 
     def _sample_puzzle_from_dataset(self, idx):
-        level = list(self.puzzle_pool.keys())[self.curriculum_level]
-        pool = self.puzzle_pool[level]
-        return np.array(pool[idx]['puzzle']), np.array(pool[idx]['solution'])
+        return (
+            np.array(self.puzzle_pool[idx]['puzzle']),
+            np.array(self.puzzle_pool[idx]['solution'])
+        )
 
     def _sample_puzzle_from_algorithm(self, difficulty, idx):
         return generate_sudoku(self._sample_difficulty())
