@@ -3,6 +3,8 @@
 import random
 import numpy as np
 from enum import Enum
+from datasets import load_dataset
+from collections import defaultdict
 
 class Difficulty(Enum):
     VERY_EASY = (46, 50)
@@ -40,7 +42,7 @@ def _fill_grid_recursive(grid, rows, cols, boxes):
 
     box_idx = (r // 3) * 3 + c // 3
     used = rows[r] | cols[c] | boxes[box_idx]
-    
+
     nums = list(range(1, 10))
     random.shuffle(nums)
 
@@ -51,10 +53,10 @@ def _fill_grid_recursive(grid, rows, cols, boxes):
             rows[r] |= val_bit
             cols[c] |= val_bit
             boxes[box_idx] |= val_bit
-            
+
             if _fill_grid_recursive(grid, rows, cols, boxes):
                 return True
-            
+
             grid[r, c] = 0
             rows[r] &= ~val_bit
             cols[c] &= ~val_bit
@@ -64,16 +66,16 @@ def _fill_grid_recursive(grid, rows, cols, boxes):
 def _solve_recursive(grid, solutions, limit, rows, cols, boxes):
     if solutions[0] >= limit:
         return True
-        
+
     empty = _find_empty(grid)
     if not empty:
         solutions[0] += 1
         return solutions[0] >= limit
-        
+
     r, c = empty
     box_idx = (r // 3) * 3 + c // 3
     used = rows[r] | cols[c] | boxes[box_idx]
-    
+
     for num in range(1, 10):
         val_bit = 1 << (num - 1)
         if (used & val_bit) == 0:
@@ -81,52 +83,52 @@ def _solve_recursive(grid, solutions, limit, rows, cols, boxes):
             rows[r] |= val_bit
             cols[c] |= val_bit
             boxes[box_idx] |= val_bit
-            
+
             if _solve_recursive(grid, solutions, limit, rows, cols, boxes):
                 return True
-                
+
             grid[r, c] = 0
             rows[r] &= ~val_bit
             cols[c] &= ~val_bit
             boxes[box_idx] &= ~val_bit
-            
+
     return False
 
 def generate_sudoku(difficulty: Difficulty):
     board = np.zeros((9, 9), dtype=int)
     rows, cols, boxes = _get_masks(board)
     _fill_grid_recursive(board, rows, cols, boxes)
-    
+
     solution = board.copy()
     puzzle = board.copy()
-    
+
     target_clues_range = difficulty.value
-    
+
     cells = list(range(81))
     random.shuffle(cells)
-    
+
     clues = 81
     cursor = 0
-    
+
     while cursor < len(cells) and clues > target_clues_range[1]:
         idx = cells[cursor]
         cursor += 1
         r, c = idx // 9, idx % 9
-        
+
         backup = puzzle[r, c]
         puzzle[r, c] = 0
-        
+
         test_puzzle = puzzle.copy()
         solutions = [0]
-        
+
         test_rows, test_cols, test_boxes = _get_masks(test_puzzle)
         _solve_recursive(test_puzzle, solutions, 2, test_rows, test_cols, test_boxes)
-        
+
         if solutions[0] != 1:
             puzzle[r, c] = backup
         else:
             clues -= 1
-            
+
     if clues > target_clues_range[0]:
         for j in range(cursor, len(cells)):
             if clues <= target_clues_range[0]:
@@ -139,19 +141,56 @@ def generate_sudoku(difficulty: Difficulty):
 
             backup = puzzle[r, c]
             puzzle[r, c] = 0
-            
+
             test_puzzle = puzzle.copy()
             solutions = [0]
 
             test_rows, test_cols, test_boxes = _get_masks(test_puzzle)
             _solve_recursive(test_puzzle, solutions, 2, test_rows, test_cols, test_boxes)
-            
+
             if solutions[0] != 1:
                 puzzle[r, c] = backup
             else:
                 clues -= 1
 
     return puzzle, solution
+
+def load_online_puzzle(shard) -> dict:
+    """
+    Load a Sudoku dataset from an online source and group puzzles by their 'missing' count.
+
+    Returns:
+        grouped_data: dict where keys are missing counts (as strings)
+                      and values are lists of samples (dicts).
+                      Each sample includes:
+                        - 'puzzle': np.ndarray (9, 9)
+                        - 'solution': np.ndarray (9, 9)
+                        - 'missing', 'difficulty', 'set', 'solving_time'
+    """
+    # Load the dataset from Hugging Face
+    dataset = load_dataset("Ritvik19/Sudoku-Dataset", split=shard)
+
+    # Convert 'puzzle' and 'solution' to 9x9 numpy arrays
+    dataset = dataset.map(lambda example: {
+        'puzzle': np.array(list(map(int, example['puzzle'])), dtype=np.int64).reshape(9, 9),
+        'solution': np.array(list(map(int, example['solution'])), dtype=np.int64).reshape(9, 9)
+    })
+
+    # Sort and filter out cases with missing == 1
+    dataset = dataset.sort('missing')
+    dataset = dataset.filter(lambda example: example['missing'] != 1)
+
+    # Group the dataset by 'missing' count
+    grouped_data = defaultdict(list)
+    for item in dataset:
+        grouped_data[item['missing']].append(item)
+
+    # Convert defaultdict to normal dict with string keys (JSON-friendly)
+    grouped_data = {str(k): v for k, v in grouped_data.items()}
+
+    return grouped_data
+
+
 
 def sudoku_board_string(board):
     horizontal_line = "+-------+-------+-------+"

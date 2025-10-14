@@ -45,7 +45,7 @@ def train():
     optimizer = AdamAtan2(model.parameters(), lr=1e-4, betas=(0.9, 0.95))
 
     # Training batch
-    batch = TrainingBatch(model, batch_size=128, device=device)
+    batch = TrainingBatch(model, batch_size=128, device=device, shard="train[:1%]")
 
     step_idx = 0
     steps_since_graduation = 0

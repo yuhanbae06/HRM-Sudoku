@@ -2,9 +2,11 @@
 
 import torch
 import torch.nn.functional as F
+import numpy as np
 from model import HRMACTInner
-from sudoku import generate_sudoku, Difficulty
+from sudoku import load_online_puzzle, generate_sudoku, Difficulty
 import random
+
 
 def sudoku_loss(model, hidden_states, board_inputs, board_targets, segments):
     config = model.config
@@ -76,12 +78,19 @@ class TrainingBatch:
         [0.1, 0.3, 0.4, 0.2],
     ]
 
-    def __init__(self, model: HRMACTInner, batch_size: int, device: torch.device):
+    def __init__(self, model: HRMACTInner, batch_size: int, device: torch.device, shard: str = None):
         self.model = model
         self.batch_size = batch_size
         self.device = device
         self.curriculum_level = 0
         self.total_puzzles = 0
+        if shard is None:
+            print("Sample puzzle from algorithm")
+            self.sample_puzzle = self._sample_puzzle_from_algorithm
+        else:
+            print("Sample puzzle from dataset")
+            self.puzzle_pool = load_online_puzzle(shard) if shard is not None else []
+            self.sample_puzzle = self._sample_puzzle_from_dataset
 
         hidden_size = model.config.transformers.hidden_size
         seq_len = model.config.seq_len
@@ -101,8 +110,19 @@ class TrainingBatch:
     def _sample_difficulty(self):
         return random.choices(self.DIFFICULTIES, self.CURRICULUM_PROBAS[self.curriculum_level], k=1)[0]
 
+    def _normalize_dataset_to_np_array(self, sample):
+        return np.array(list(map(int, sample)), dtype=np.int64).reshape(9, 9),
+
+    def _sample_puzzle_from_dataset(self, idx):
+        level = list(self.puzzle_pool.keys())[self.curriculum_level]
+        pool = self.puzzle_pool[level]
+        return np.array(pool[idx]['puzzle']), np.array(pool[idx]['solution'])
+
+    def _sample_puzzle_from_algorithm(self, difficulty, idx):
+        return generate_sudoku(self._sample_difficulty())
+
     def replace(self, idx: int):
-        puzzle, solution = generate_sudoku(self._sample_difficulty())
+        puzzle, solution = self.sample_puzzle(idx)
         self.board_inputs[idx] = torch.tensor(puzzle.flatten(), device=self.device)
         self.board_targets[idx] = torch.tensor(solution.flatten(), device=self.device)
 
@@ -121,7 +141,10 @@ class TrainingBatch:
         self.total_puzzles += 1
 
     def graduate(self):
-        if self.curriculum_level + 1 < len(self.CURRICULUM_PROBAS):
+        if self.puzzle_pool is not None and self.curriculum_level + 1 < len(self.puzzle_pool.keys()):
+            self.curriculum_level += 1
+            print(f"Graduated to curriculum level {self.curriculum_level}.")
+        elif self.curriculum_level + 1 < len(self.CURRICULUM_PROBAS):
             self.curriculum_level += 1
             print(f"Graduated to curriculum level {self.curriculum_level}.")
         else:
