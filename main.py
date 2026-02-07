@@ -148,6 +148,81 @@ def infer(checkpoint_path, difficulty_str, turns = 1, verbose = False):
             print(f"Game {turn}: {'Win' if win else 'Loss'}")
     print(f"Total wins: {wins}/{turns}")
 
+def evaluate(checkpoint_path, num_puzzles=100):
+    # Setup device
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    print(f"Using device: {device}")
+
+    # Config
+    config = HRMACTModelConfig(
+        seq_len=81, vocab_size=10, high_level_cycles=2, low_level_cycles=2,
+        transformers=HRMACTModelConfig.TransformerConfig(num_layers=4, hidden_size=256, num_heads=4, expansion=4),
+        act=HRMACTModelConfig.ACTConfig(halt_max_steps=16, halt_exploration_probability=0.1)
+    )
+
+    # Load model
+    model = HRMACTInner(config).to(device, dtype=config.dtype)
+    model.load_state_dict(load_file(checkpoint_path, device=str(device)))
+    model.eval()
+    print("Loaded model from checkpoint!")
+
+    # Generate Sudoku
+    difficulty_map = {
+        "very-easy": Difficulty.VERY_EASY, "easy": Difficulty.EASY,
+        "medium": Difficulty.MEDIUM, "hard": Difficulty.HARD, "extreme": Difficulty.EXTREME
+    }
+    difficulty_wins = {diff: 0 for diff in difficulty_map.keys()}
+    
+    for difficulty_str, _ in difficulty_map.items():
+        wins = 0
+        for turn in range(num_puzzles):
+            difficulty = difficulty_map[difficulty_str]
+            puzzle, solution = generate_sudoku(difficulty)
+
+            puzzle_tensor = torch.tensor(puzzle.flatten(), dtype=torch.long, device=device).unsqueeze(0)
+
+            # Initial hidden states
+            low_h = model.initial_low_level.unsqueeze(0).expand(1, config.seq_len + 1, -1)
+            high_h = model.initial_high_level.unsqueeze(0).expand(1, config.seq_len + 1, -1)
+            hidden_states = (low_h, high_h)
+
+            with torch.no_grad():
+                for segment in range(1, config.act.halt_max_steps + 1):
+
+                    output = model(hidden_states, puzzle_tensor)
+                    hidden_states, output_logits, q_halt, q_continue = output
+
+                    predictions = output_logits.argmax(dim=-1).squeeze(0).cpu().numpy()
+
+                    # Display prediction
+                    accurate_squares, predicted_squares = 0, 0
+                    predicted_board_flat = []
+
+                    for i, p_val in enumerate(puzzle.flatten()):
+                        if p_val != 0:
+                            predicted_board_flat.append(p_val)
+                        else:
+                            pred = predictions[i]
+                            sol = solution.flatten()[i]
+                            predicted_board_flat.append(pred)
+                            predicted_squares += 1
+                            if pred == sol:
+                                accurate_squares += 1
+
+                    predicted_board = np.array(predicted_board_flat).reshape(9, 9)
+
+                    q_h, q_c = torch.sigmoid(q_halt).item(), torch.sigmoid(q_continue).item()
+
+                    if q_h > q_c:
+                        break
+            win = np.allclose(predicted_board, solution)
+            wins += 1 if win else 0
+        difficulty_wins[difficulty_str] = wins
+    
+    print("Evaluation Results:")
+    for diff, win_count in difficulty_wins.items():
+        print(f"  {diff}: {win_count}/{num_puzzles} wins")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hierarchical Reasoning Model in PyTorch")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -163,9 +238,16 @@ if __name__ == "__main__":
     parser_infer.add_argument("--turns", type=int, default=1, help="Number of turns (inference iterations) to run")
     parser_infer.add_argument("--verbose", type=bool, default=False, help="Whether to print verbose output")
 
+    # Evaluate command
+    parser_evaluate = subparsers.add_parser("evaluate", help="Evaluate a trained model on a variety of puzzles")
+    parser_evaluate.add_argument("checkpoint", type=str, help="Path to the model checkpoint (.safetensors)")
+    parser_evaluate.add_argument("--num_puzzles", type=int, default=100, help="Number of puzzles to evaluate on")
+
     args = parser.parse_args()
 
     if args.command == "train":
         train()
     elif args.command == "infer":
         infer(args.checkpoint, args.difficulty, args.turns, args.verbose)
+    elif args.command == "evaluate":
+        evaluate(args.checkpoint, args.num_puzzles)
