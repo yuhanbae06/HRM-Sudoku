@@ -13,9 +13,7 @@ from adam_atan2_pytorch import AdamAtan2 # adam-atan2-pytorch
 
 def train():
     # Setup device
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("MPS backend not available.")
-    device = torch.device("mps")
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
     # Model configuration
@@ -72,7 +70,7 @@ def train():
 
 def infer(checkpoint_path, difficulty_str, turns = 1, verbose = False):
     # Setup device
-    device = torch.device("mps")
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     print(f"Using device: {device}")
 
     # Config
