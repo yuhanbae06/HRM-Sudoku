@@ -9,6 +9,7 @@ from safetensors.torch import save_file, load_file
 from model import HRMACTInner, HRMACTModelConfig
 from train import TrainingBatch, train_step
 from sudoku import generate_sudoku, Difficulty, sudoku_board_string
+from grpo_finetune import train_grpo_act
 from adam_atan2_pytorch import AdamAtan2 # adam-atan2-pytorch
 
 def train():
@@ -182,8 +183,8 @@ def evaluate(checkpoint_path, num_puzzles=100):
             puzzle_tensor = torch.tensor(puzzle.flatten(), dtype=torch.long, device=device).unsqueeze(0)
 
             # Initial hidden states
-            low_h = model.initial_low_level.unsqueeze(0).expand(1, config.seq_len + 1, -1)
-            high_h = model.initial_high_level.unsqueeze(0).expand(1, config.seq_len + 1, -1)
+            low_h = model.initial_low_level.unsqueeze(0).expand(1, config.seq_len + 1, -1).to(device, dtype=config.dtype)
+            high_h = model.initial_high_level.unsqueeze(0).expand(1, config.seq_len + 1, -1).to(device, dtype=config.dtype)
             hidden_states = (low_h, high_h)
 
             with torch.no_grad():
@@ -243,6 +244,19 @@ if __name__ == "__main__":
     parser_evaluate.add_argument("checkpoint", type=str, help="Path to the model checkpoint (.safetensors)")
     parser_evaluate.add_argument("--num_puzzles", type=int, default=100, help="Number of puzzles to evaluate on")
 
+    # GRPO fine-tuning command
+    parser_grpo = subparsers.add_parser(
+        "train-grpo-act",
+        help="Interleaved GRPO (output policy) + Q-ACT training"
+    )
+    parser_grpo.add_argument("checkpoint", type=str)
+    parser_grpo.add_argument("--iterations", type=int, default=1000)
+    parser_grpo.add_argument("--grpo-batch-size", type=int, default=32)
+    parser_grpo.add_argument("--group-size", type=int, default=8)
+    parser_grpo.add_argument("--grpo-lr", type=float, default=5e-5)
+    parser_grpo.add_argument("--dataset-shard", type=str, default="train[:1%]")
+    parser_grpo.add_argument("--save-every", type=int, default=250)
+
     args = parser.parse_args()
 
     if args.command == "train":
@@ -251,3 +265,13 @@ if __name__ == "__main__":
         infer(args.checkpoint, args.difficulty, args.turns, args.verbose)
     elif args.command == "evaluate":
         evaluate(args.checkpoint, args.num_puzzles)
+    elif args.command == "train-grpo-act":
+        train_grpo_act(
+            checkpoint_path=args.checkpoint,
+            iterations=args.iterations,
+            grpo_rollout_batch_size=args.grpo_batch_size,
+            grpo_group_size=args.group_size,
+            grpo_lr=args.grpo_lr,
+            dataset_shard=args.dataset_shard,
+            save_every=args.save_every
+        )
