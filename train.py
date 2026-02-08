@@ -123,7 +123,7 @@ class TrainingBatch:
 
     def _sample_puzzle_from_dataset(self, idx):
         actual_idx = (self.total_puzzles + idx) % len(self.puzzle_pool)
-        print(f"Sampling puzzle from dataset at index {actual_idx}")
+        # print(f"Sampling puzzle from dataset at index {actual_idx}")
         return (
             np.array(self.puzzle_pool[actual_idx]['puzzle']),
             np.array(self.puzzle_pool[actual_idx]['solution'])
@@ -161,7 +161,7 @@ class TrainingBatch:
         else:
             print("Reached highest curriculum level.")
 
-def train_step(model, optimizer, batch):
+def train_step(model, optimizer, batch, only_q_act=False):
     optimizer.zero_grad()
 
     (loss, out_loss, q_loss, is_halted,
@@ -173,7 +173,10 @@ def train_step(model, optimizer, batch):
         batch.segments
     )
 
-    loss.backward()
+    if only_q_act:
+        q_loss.backward()
+    else:
+        loss.backward()
     optimizer.step()
 
     print(

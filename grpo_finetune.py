@@ -57,8 +57,8 @@ class RolloutDatasetSampler:
         for _ in range(batch_size):
             idx = self.cursor % self.size
             sample = self.dataset[idx]
-            puzzles.append(sample["puzzle"].flatten())
-            solutions.append(sample["solution"].flatten())
+            puzzles.append(np.array(sample["puzzle"]).flatten())
+            solutions.append(np.array(sample["solution"]).flatten())
             self.cursor += 1
         return puzzles, solutions
 
@@ -168,6 +168,23 @@ def grpo_update_from_buffer(
     max_grad_norm=1.0,
 ):
     device = next(model.parameters()).device
+
+    # Ensure buffer length is a multiple of group_size by dropping trailing samples
+    n_samples = len(buffer)
+    if n_samples == 0:
+        raise ValueError("Empty buffer passed to grpo_update_from_buffer")
+    if group_size <= 0:
+        raise ValueError("group_size must be > 0")
+
+    rem = n_samples % group_size
+    if rem != 0:
+        # Trim the last `rem` samples so the length is divisible by group_size
+        new_len = n_samples - rem
+        if new_len == 0:
+            raise ValueError("Not enough samples in buffer to form a single group after trimming")
+        # Keep the first new_len samples
+        buffer = buffer[:new_len]
+        n_samples = new_len
 
     rewards = torch.stack([s.reward for s in buffer]).to(device)
     advantages = grpo_advantages_from_samples(rewards, group_size).detach()
@@ -294,7 +311,8 @@ def train_grpo_act(
         qact_acc = train_step(
             model=model,
             optimizer=optimizer,
-            batch=qact_batch
+            batch=qact_batch,
+            only_q_act=True
         )
 
         if it % 10 == 0:
